@@ -1,0 +1,858 @@
+---
+title: "Written_Homework4"
+author: "Jeffrey Ochavillo and Arthur Setiawan"
+date: "2023-05-28"
+output: html_document
+---
+
+Install Libraries
+```{r}
+library(tidyverse)
+library(ISLR2)
+library(RSpectra)
+```
+
+Read Dataset
+```{r}
+library(readr)
+wine_data <- read_csv("winequality-red.csv")
+```
+
+The question we are trying to answer is how we can maximize predicting the quality of red wine based on the different variables that exist, specifically different acidity, sugar levels, chlorides, density, pH, sulphates, alcohol content, and sulfur dioxide. These variables are highly attributed from the type of grapes that are being used, as well as the soil that the vineyards grow on. 
+
+Based on the Kaggle dataset, a quality of higher than 6.5 means it is a 'good' quality red wine
+
+Note to self: Maybe we should split clusters to >= 6.5, 5 <= x < 6.5, 3 <= x < 5
+```{r}
+selected_vars <- c("fixed acidity", "volatile acidity", "citric acid", "residual sugar",
+                   "chlorides", "free sulfur dioxide", "total sulfur dioxide", "density",
+                   "pH", "sulphates", "alcohol", "quality", "quality_group")
+
+#Substitute space with underscore.
+new_vars <- gsub(" ", "_", selected_vars)
+
+#Redefine colnames for ease of use
+colnames(wine_data) <- new_vars
+
+#Define quality group
+wine_data$quality_group <- ifelse(wine_data$quality > 6.5, "good",
+                                           ifelse(wine_data$quality >= 5 & wine_data$quality < 6.5, "medium", "bad"))
+
+#Factor quality_group
+wine_data$quality_group <- factor(wine_data$quality_group, levels = c("bad", "medium", "good"))
+
+#Define Wine Data Selected, removing our response variable 'quality' and quality_group
+wine_data_selected <- wine_data[, new_vars] %>% select(-c('quality','quality_group'))
+
+```
+
+Initial Look
+```{r}
+summary(wine_data_selected)
+head(wine_data_selected)
+```
+
+
+EDAs
+
+
+```{r}
+boxplot(wine_data_selected$alcohol ~ wine_data$quality, xlab = "Wine Quality", ylab = "Alcohol Content (%)")
+```
+
+
+
+```{r}
+correlation_matrix <- cor(wine_data_selected)
+heatmap(correlation_matrix)
+```
+Check for N/As
+```{r}
+sum(is.na(wine_data_selected))
+```
+
+Feature Relationships: Explore relationships between variables to uncover patterns or dependencies. You can use scatter plots, correlation analysis, or interactive visualizations for this purpose.
+
+```{r}
+pairs(wine_data_selected[, 1:4])  # Scatter plot matrix of the first four variables
+```
+Data Distributions: Examine the distribution of variables to understand their shape and skewness. Histograms, density plots, or quantile-quantile (Q-Q) plots can help in assessing the distributional characteristics.
+
+```{r}
+hist(wine_data_selected$alcohol)
+```
+
+
+
+
+PCA Implementation and Analysis
+
+Check our PCA results for interpretation purposes
+```{r}
+pca_model <- prcomp(wine_data_selected, scale = TRUE)
+names(pca_model)
+cat('\n=======================================================================================================\n')
+pca_model
+cat('\n=======================================================================================================\n')
+summary(pca_model)
+```
+To see how descriptive the principal components are, we plot proportion of variance in data that explained by each principal component.
+```{r}
+pve <- pca_model$sdev^2/sum(pca_model$sdev^2)
+
+par(mfrow = c(1, 2))
+plot(pve, xlab = "Principal Component",
+    ylab = "Proportion of Variance Explained", ylim = c(0, 1),
+    type = "b")
+plot(cumsum(pve), xlab = "Principal Component",
+    ylab = "Cumulative Proportion of Variance Explained",
+    ylim = c(0, 1), type = "b")
+```
+Looking at the principal components also tells us something about the data. We can take the absolute value of the principal components to get the importance each variable has, knowing that magnitude, rather than sign, is important.
+
+For the first principal component, fixed acidity, citric acid, pH, and density are the most important variables
+```{r}
+pca_model$rotation[,1] %>% abs() %>% sort(decreasing=TRUE) 
+```
+
+For the second principal component, total sulfur dioxide, free sulfur dioxide, alcohol, and volatile acidity are the most important variables
+```{r}
+pca_model$rotation[,2] %>% abs() %>% sort(decreasing=TRUE) 
+```
+
+
+K-Means Clustering
+
+```{r}
+#cluster the data into three groups
+num_clusters <- 3
+kmeans_model <- kmeans(wine_data_selected, centers = num_clusters)
+```
+
+Initial plot of original data, blue hue shows quality changes, lighter hue = higher quality. (max 3) darker hue = lower quality (min 3)
+```{r}
+ggplot(wine_data, aes(x=fixed_acidity, y=total_sulfur_dioxide, color=quality_group)) + geom_point()
+```
+
+```{r}
+set.seed(2023)
+wine.km <- kmeans(select(wine_data, -c('quality','quality_group')), 3, nstart = 20)
+wine_data$clusters = as.factor(wine.km$cluster)
+ggplot(wine_data, aes(x=fixed_acidity,y=total_sulfur_dioxide, color=clusters, shape=quality_group)) + geom_point()
+```
+
+Now take SVD of data
+
+What if we first take the SVD of the data? We first remove the quality label and scale the original data, then take the SVD. 
+
+Plotting on the first and third singular vectors, we can see that quality group is decently separated in this case, though not the best.
+```{r}
+winescale <-  wine_data %>% select(-c(clusters,quality,quality_group)) %>% scale()
+wineSVD <- svd(winescale)
+plot(wineSVD$u[,1], wineSVD$u[,3], col = wine_data$quality_group)
+```
+Now we apply k-means on the locations of the data in singular vector space.
+We plot the clusters, agnostic to the quality. This seems somewhat closer to the original, though there is no overbearing theme of one cluster being too dominant like in the actual dataset where 'medium' quality group is dominant
+
+Looks like, green = medium, red = good, blue = bad
+```{r}
+set.seed(2023)
+sv.km <- kmeans(wineSVD$u, 3, nstart = 100)
+wine_data$svclusters = as.factor(sv.km$cluster)
+ggplot(wine_data, aes(x=fixed_acidity, y=total_sulfur_dioxide, color=svclusters)) + geom_point()
+```
+ANSWER FOR PART D
+
+We can see that most of the time the cluster is labeled 3, it is bad wine quality. Most of the time the cluster is labeled 2, it is medium quality, and 1, good quality We assign a new label simply based on the output of the clustering and these apparent clusters compared to real quality 
+We also make a variable to tell when these values are different from each other. 
+```{r}
+wine_data$svlabels = ifelse(wine_data$svclusters == 3, 'bad',
+            ifelse(wine_data$svclusters == 2, 'medium',
+                           'good' ))
+wine_data$different = as.factor(ifelse(wine_data$svlabels == wine_data$quality_group, 0, 1))
+
+```
+
+Plotting the quality groups using color and fill opacity to show when they are different, we can see that the vast majority of the time.
+
+We are seeing that they differ by 34% from the true data.
+
+The clustering attempts to somewhat equally distribute quality groups moreso than the true nature of the dataset.
+
+```{r}
+ggplot(wine_data, aes(x=fixed_acidity, y=total_sulfur_dioxide, color=quality_group, alpha=different)) + geom_point()
+sum(wine_data$different==1)/length(wine_data$different)
+```
+
+Hierarchical Clustering
+
+Although all linkages seem to not be as interpretable, we can see that the more balanced ones seem to be the complete, average, and centroid linkages. Let's explore further
+```{r}
+set.seed(2023)
+wine_data_hc <- wine_data %>% select(-c('clusters','svclusters','quality_group','svlabels','different'))
+small_wine <- wine_data_hc[sample(nrow(wine_data_hc), 20),]
+
+#perform agglomerative hierarchical clustering for all linkage methods
+hc.complete <- hclust(dist(wine_data_hc), method = 'complete')
+hc.average <- hclust(dist(wine_data_hc), method = 'average')
+hc.single <- hclust(dist(wine_data_hc), method = 'single')
+hc.centroid <- hclust(dist(wine_data_hc), method = 'centroid')
+
+#Plot
+par(mfrow = c(1, 4))
+plot(hc.complete, main = "Complete Linkage",
+    xlab = "", sub = "", cex = .5)
+plot(hc.average, main = "Average Linkage",
+    xlab = "", sub = "", cex = .5)
+plot(hc.single, main = "Single Linkage",
+    xlab = "", sub = "", cex = .5)
+plot(hc.centroid, main = "Centroid Linkage",
+    xlab = "", sub = "", cex = .5)
+```
+
+
+
+Now Scale our Data!
+
+On this scaled data, our hierarchical clustering linkges yield good results for complete and average linkages!
+```{r}
+set.seed(2023)
+scaled_small_wine <- wine_data_hc[sample(nrow(wine_data_hc), 20),]
+scaled_small_wine <- scaled_small_wine %>% scale()
+
+#perform agglomerative hierarchical clustering for all linkage methods
+hc.complete <- hclust(dist(scaled_small_wine), method = 'complete')
+hc.average <- hclust(dist(scaled_small_wine), method = 'average')
+hc.single <- hclust(dist(scaled_small_wine), method = 'single')
+hc.centroid <- hclust(dist(scaled_small_wine), method = 'centroid')
+
+#Plot
+par(mfrow = c(1, 4))
+plot(hc.complete, main = "Scaled Complete Linkage",
+    xlab = "", sub = "", cex = .5)
+plot(hc.average, main = "Scaled Average Linkage",
+    xlab = "", sub = "", cex = .5)
+plot(hc.single, main = "Scaled Single Linkage",
+    xlab = "", sub = "", cex = .5)
+plot(hc.centroid, main = "Scaled Centroid Linkage",
+    xlab = "", sub = "", cex = .5)
+```
+
+Scaled Complete Linkage
+```{r}
+#Cut
+cutree(hc.complete, 3)
+
+#Plot
+plot(hc.complete, main = "Scaled Complete Linkage",
+    xlab = "", sub = "", cex = .5)
+```
+Scaled Average Linkage
+```{r}
+#Cut
+cutree(hc.average, 2)
+
+#Plot
+plot(hc.average, main = "Scaled Average Linkage",
+    xlab = "", sub = "", cex = .5)
+```
+
+
+Supervised Learning Methods
+
+Looking to do classification on this dataset
+
+I produced a single layer network and mutiple layer neural network
+
+```{r}
+#tree based 
+# Load required libraries
+library(randomForest)
+
+# Read the wine_data dataset
+# wine_data <- read_csv("winequality-red.csv")
+# 
+# selected_vars <- c("fixed acidity", "volatile acidity", "citric acid", "residual sugar",
+#                    "chlorides", "free sulfur dioxide", "total sulfur dioxide", "density",
+#                    "pH", "sulphates", "alcohol", "quality", "quality_group")
+# 
+# #Substitute space with underscore.
+# new_vars <- gsub(" ", "_", selected_vars)
+# 
+# #Redefine colnames for ease of use
+# colnames(wine_data) <- new_vars
+
+# Split the data into training and testing sets
+set.seed(123)  # For reproducibility
+train_indices <- sample(1:nrow(wine_data), nrow(wine_data) * 0.8)  # 80% for training
+train_data <- wine_data[train_indices, ]
+test_data <- wine_data[-train_indices, ]
+
+# Train a random forest model
+rf_model <- randomForest(quality ~ ., data = train_data, ntree = 100)
+
+# Predict on the test data
+predictions <- predict(rf_model, newdata = test_data)
+
+# Evaluate the model
+accuracy <- sum(predictions == test_data$quality) / nrow(test_data)
+print(paste("Accuracy:", accuracy))
+
+```
+
+```{r}
+# Load required libraries
+library(keras)
+library(tidyverse)
+
+# Read the wine_data dataset
+wine_data <- read_csv("winequality-red.csv")
+
+# Define the selected variables
+selected_vars <- c("fixed acidity", "volatile acidity", "citric acid", "residual sugar",
+                   "chlorides", "free sulfur dioxide", "total sulfur dioxide", "density",
+                   "pH", "sulphates", "alcohol", "quality")
+
+# Subset the dataset to selected variables
+wine_data_subset <- wine_data %>% select(selected_vars)
+
+# Prepare the data
+x <- as.matrix(wine_data_subset[, -ncol(wine_data_subset)])
+y <- as.matrix(wine_data_subset$quality)
+
+# Normalize the input features
+x <- scale(x)
+
+# Create a sequential model
+model <- keras_model_sequential()
+
+# Add a single layer to the model
+model %>%
+  layer_dense(units = 1, activation = "linear", input_shape = ncol(x))
+
+# Compile the model
+model %>% compile(
+  loss = "mean_squared_error",
+  optimizer = optimizer_sgd(lr = 0.01)
+)
+
+# Train the model
+history <- model %>% fit(
+  x, y,
+  epochs = 100,
+  batch_size = 32,
+  validation_split = 0.2
+)
+
+# Evaluate the model
+evaluation <- model %>% evaluate(x, y)
+print(evaluation)
+
+scores <- model %>% evaluate(test_data, test_labels)
+cat("Test accuracy:", scores[[2]], "\n")
+
+```
+
+0.4189827  the loss is calculated using the mean squared error (MSE) loss function.
+
+The MSE loss measures the average squared difference between the predicted values and the true values. A lower MSE loss indicates better performance, as it means that the model's predictions are closer to the actual values.
+
+In the context of your single-layer network on the wine_data dataset, a loss of 0.4189827 suggests that, on average, the model's predictions have a squared difference of 0.4189827 from the true quality values in the training data.
+
+
+```{r}
+
+#This calculates the accuracy of our model in the end
+
+# Load required libraries
+library(readr)
+library(keras)
+library(caret)
+
+# Read the CSV file
+wine_data <- read_csv("winequality-red.csv")
+
+# Define the selected variables
+selected_vars <- c("fixed acidity", "volatile acidity", "citric acid", "residual sugar",
+                   "chlorides", "free sulfur dioxide", "total sulfur dioxide", "density",
+                   "pH", "sulphates", "alcohol", "quality")
+
+# Subset the dataset to selected variables
+wine_data_subset <- wine_data %>% select(selected_vars)
+
+# Prepare the data
+x <- as.matrix(wine_data_subset[, -ncol(wine_data_subset)])
+y <- as.matrix(wine_data_subset$quality)
+
+# Normalize the input features
+x <- scale(x)
+
+# Split the data into training and testing sets
+set.seed(123)
+train_indices <- createDataPartition(y, p = 0.8, list = FALSE)
+x_train <- x[train_indices, ]
+y_train <- y[train_indices, ]
+x_test <- x[-train_indices, ]
+y_test <- y[-train_indices, ]
+
+# Create a sequential model
+model <- keras_model_sequential()
+
+# Add a single layer to the model
+model %>%
+  layer_dense(units = 1, activation = "linear", input_shape = ncol(x))
+
+# Compile the model
+model %>% compile(
+  loss = "mean_squared_error",
+  optimizer = optimizer_sgd(lr = 0.01)
+)
+
+# Train the model
+history <- model %>% fit(
+  x_train, y_train,
+  epochs = 100,
+  batch_size = 32,
+  validation_split = 0.2
+)
+
+# Evaluate the model on test data
+test_evaluation <- model %>% evaluate(x_test, y_test)
+test_accuracy <- 1 - test_evaluation[[1]]
+
+# Print the test accuracy
+cat("Test accuracy:", test_accuracy, "\n")
+
+
+```
+
+We can scratch this line of code
+# ```{r}
+# # Load required libraries
+# library(keras)
+# library(ISLR2)
+# library(tidyverse)
+# 
+# # Read the wine_data dataset
+# wine_data <- read_csv("winequality-red.csv")
+# 
+# # Define the selected variables
+# selected_vars <- c("fixed acidity", "volatile acidity", "citric acid", "residual sugar",
+#                    "chlorides", "free sulfur dioxide", "total sulfur dioxide", "density",
+#                    "pH", "sulphates", "alcohol", "quality")
+# 
+# # Substitute spaces with underscores
+# new_vars <- gsub(" ", "_", selected_vars)
+# 
+# # Redefine column names for ease of use
+# colnames(wine_data) <- new_vars
+# 
+# # Prepare the data
+# #wine_data_subset <- wine_data %>% select(selected_vars)
+# 
+# # Prepare the data
+# x <- as.matrix(wine_data_subset[, -ncol(wine_data_subset)])
+# y <- as.matrix(wine_data_subset$quality)
+# 
+# # Normalize the input features
+# x <- scale(x)
+# 
+# # Create a sequential model
+# model <- keras_model_sequential()
+# 
+# # Add layers to the model
+# model %>%
+#   layer_dense(units = 64, activation = "relu", input_shape = ncol(x)) %>%
+#   layer_dense(units = 32, activation = "relu") %>%
+#   layer_dense(units = 16, activation = "relu") %>%
+#   layer_dense(units = 1, activation = "linear")
+# 
+# # Compile the model
+# # model %>% compile(
+# #   loss = "mean_squared_error",
+# #   optimizer = optimizer_sgd(lr = 0.001)  # Adjust the learning rate
+# # )
+# 
+# 
+# # Example with a different optimizer
+# model %>% compile(
+#   loss = "mean_squared_error",
+#   optimizer = optimizer_adam()  # Use Adam optimizer
+# )
+# # Train the model
+# history <- model %>% fit(
+#   x, y,
+#   epochs = 100,
+#   batch_size = 32,
+#   validation_split = 0.2
+# )
+# 
+# # # Example with a higher number of epochs
+# # history <- model %>% fit(
+# #   x, y,
+# #   epochs = 200,  # Increase the number of epochs
+# #   batch_size = 32,
+# #   validation_split = 0.2
+# # )
+# 
+# 
+# # Evaluate the model
+# evaluation <- model %>% evaluate(x, y)
+# print(evaluation)
+# 
+# test_accuracy
+# 
+# 
+# ```
+New Model to calculate the accuracy: 
+
+```{r}
+# Load required libraries
+library(keras)
+library(ISLR2)
+library(tidyverse)
+library(caret)
+
+# Read the wine_data dataset
+# wine_data <- read_csv("winequality-red.csv")
+# 
+# # Define the selected variables
+# selected_vars <- c("fixed acidity", "volatile acidity", "citric acid", "residual sugar",
+#                    "chlorides", "free sulfur dioxide", "total sulfur dioxide", "density",
+#                    "pH", "sulphates", "alcohol", "quality")
+# 
+# # Substitute spaces with underscores
+# new_vars <- gsub(" ", "_", selected_vars)
+# 
+# # Redefine column names for ease of use
+# colnames(wine_data) <- new_vars
+# 
+# # Prepare the data
+# wine_data_subset <- wine_data %>% select(selected_vars)
+
+# Prepare the data
+x <- as.matrix(wine_data_subset[, -ncol(wine_data_subset)])
+y <- as.matrix(wine_data_subset$quality)
+
+# Normalize the input features
+x <- scale(x)
+
+# Split the data into training and testing sets
+set.seed(123)
+train_indices <- createDataPartition(y, p = 0.8, list = FALSE)
+x_train <- x[train_indices, ]
+y_train <- y[train_indices, ]
+x_test <- x[-train_indices, ]
+y_test <- y[-train_indices, ]
+
+# Create a sequential model
+model <- keras_model_sequential()
+
+# Add layers to the model
+model %>%
+  layer_dense(units = 64, activation = "relu", input_shape = ncol(x)) %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dense(units = 16, activation = "relu") %>%
+  layer_dense(units = 1, activation = "linear")
+
+# Compile the model
+model %>% compile(
+  loss = "mean_squared_error",
+  optimizer = optimizer_adam()  # Use Adam optimizer
+)
+
+# Train the model
+history <- model %>% fit(
+  x_train, y_train,
+  epochs = 100,
+  batch_size = 32,
+  validation_split = 0.2
+)
+
+# Evaluate the model on test data
+test_evaluation <- model %>% evaluate(x_test, y_test)
+test_accuracy <- 1 - test_evaluation[[1]]
+
+# Print the test accuracy
+cat("Test accuracy:", test_accuracy, "\n")
+```
+
+```{r}
+# Load required libraries
+library(readr)
+library(keras)
+library(caret)
+
+# Read the CSV file
+wine_data <- read_csv("winequality-red.csv")
+
+# Define the selected variables
+selected_vars <- c("fixed acidity", "volatile acidity", "citric acid", "residual sugar",
+                   "chlorides", "free sulfur dioxide", "total sulfur dioxide", "density",
+                   "pH", "sulphates", "alcohol", "quality")
+
+# Subset the dataset to selected variables
+wine_data_subset <- wine_data %>% select(selected_vars)
+
+# Prepare the data
+x <- as.matrix(wine_data_subset[, -ncol(wine_data_subset)])
+y <- as.matrix(wine_data_subset$quality)
+
+# Normalize the input features
+x <- scale(x)
+
+# Split the data into training and testing sets
+set.seed(123)
+train_indices <- createDataPartition(y, p = 0.8, list = FALSE)
+x_train <- x[train_indices, ]
+y_train <- y[train_indices, ]
+x_test <- x[-train_indices, ]
+y_test <- y[-train_indices, ]
+
+# Create a sequential model
+model <- keras_model_sequential()
+
+# Add hidden layers to the model
+model %>%
+  layer_dense(units = 64, activation = "relu", input_shape = ncol(x)) %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dense(units = 16, activation = "relu") %>%
+  layer_dense(units = 1, activation = "linear")
+
+# Compile the model
+model %>% compile(
+  loss = "mean_squared_error",
+  optimizer = optimizer_sgd(lr = 0.001)  # Adjust the learning rate
+)
+
+# Train the model
+history <- model %>% fit(
+  x_train, y_train,
+  epochs = 200,  # Increase the number of epochs
+  batch_size = 32,
+  validation_split = 0.2
+)
+
+# Evaluate the model on test data
+test_evaluation <- model %>% evaluate(x_test, y_test)
+test_accuracy <- 1 - test_evaluation[[1]]
+
+# Print the test accuracy
+cat("Test accuracy:", test_accuracy, "\n")
+
+```
+
+```{r}
+# Load required libraries
+library(readr)
+library(keras)
+library(caret)
+
+# Read the CSV file
+wine_data <- read_csv("winequality-red.csv")
+
+# Define the selected variables
+selected_vars <- c("fixed acidity", "volatile acidity", "citric acid", "residual sugar",
+                   "chlorides", "free sulfur dioxide", "total sulfur dioxide", "density",
+                   "pH", "sulphates", "alcohol", "quality")
+
+# Subset the dataset to selected variables
+wine_data_subset <- wine_data %>% select(selected_vars)
+
+# Prepare the data
+x <- as.matrix(wine_data_subset[, -ncol(wine_data_subset)])
+y <- as.matrix(wine_data_subset$quality)
+
+# Normalize the input features
+x <- scale(x)
+
+# Split the data into training and testing sets
+set.seed(123)
+train_indices <- createDataPartition(y, p = 0.8, list = FALSE)
+x_train <- x[train_indices, ]
+y_train <- y[train_indices, ]
+x_test <- x[-train_indices, ]
+y_test <- y[-train_indices, ]
+
+# Create a sequential model
+model <- keras_model_sequential()
+
+# Add hidden layers to the model
+model %>%
+  layer_dense(units = 128, activation = "relu", input_shape = ncol(x)) %>%
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 64, activation = "relu") %>%
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 1, activation = "linear")
+
+# Compile the model
+model %>% compile(
+  loss = "mean_squared_error",
+  optimizer = optimizer_adam(lr = 0.001)  # Adjust the learning rate and use Adam optimizer
+)
+
+# Train the model
+history <- model %>% fit(
+  x_train, y_train,
+  epochs = 200,
+  batch_size = 32,
+  validation_split = 0.2
+)
+
+# Evaluate the model on test data
+test_evaluation <- model %>% evaluate(x_test, y_test)
+test_accuracy <- 1 - test_evaluation[[1]]
+
+# Print the test accuracy
+cat("Test accuracy:", test_accuracy, "\n")
+
+```
+
+```{r}
+# Load required libraries
+library(readr)
+library(keras)
+library(caret)
+
+# Read the CSV file
+wine_data <- read_csv("winequality-red.csv")
+
+# Define the selected variables
+selected_vars <- c("fixed acidity", "volatile acidity", "citric acid", "residual sugar",
+                   "chlorides", "free sulfur dioxide", "total sulfur dioxide", "density",
+                   "pH", "sulphates", "alcohol", "quality")
+
+# Subset the dataset to selected variables
+wine_data_subset <- wine_data %>% select(selected_vars)
+
+# Prepare the data
+x <- as.matrix(wine_data_subset[, -ncol(wine_data_subset)])
+y <- as.matrix(wine_data_subset$quality)
+
+# Normalize the input features
+x <- scale(x)
+
+# Split the data into training and testing sets
+set.seed(123)
+train_indices <- createDataPartition(y, p = 0.8, list = FALSE)
+x_train <- x[train_indices, ]
+y_train <- y[train_indices, ]
+x_test <- x[-train_indices, ]
+y_test <- y[-train_indices, ]
+
+# Create a sequential model
+model <- keras_model_sequential()
+
+# Add hidden layers to the model
+model %>%
+  layer_dense(units = 128, activation = "relu", input_shape = ncol(x)) %>%
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 64, activation = "relu") %>%
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 16, activation = "relu") %>%
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 1, activation = "linear")
+
+# Compile the model
+model %>% compile(
+  loss = "mean_squared_error",
+  optimizer = optimizer_adam(lr = 0.001)  # Adjust the learning rate and use Adam optimizer
+)
+
+# Train the model
+history <- model %>% fit(
+  x_train, y_train,
+  epochs = 300,  # Increase the number of epochs
+  batch_size = 32,
+  validation_split = 0.2
+)
+
+# Evaluate the model on test data
+test_evaluation <- model %>% evaluate(x_test, y_test)
+test_accuracy <- 1 - test_evaluation[[1]]
+
+# Print the test accuracy
+cat("Test accuracy:", test_accuracy, "\n")
+
+```
+
+
+THE MODEL WITH THE BEST ACCURACY
+```{r}
+# Load required libraries
+library(readr)
+library(keras)
+library(caret)
+
+# Read the CSV file
+wine_data <- read_csv("winequality-red.csv")
+
+# Define the selected variables
+selected_vars <- c("fixed acidity", "volatile acidity", "citric acid", "residual sugar",
+                   "chlorides", "free sulfur dioxide", "total sulfur dioxide", "density",
+                   "pH", "sulphates", "alcohol", "quality")
+
+# Subset the dataset to selected variables
+wine_data_subset <- wine_data %>% select(selected_vars)
+
+# Prepare the data
+x <- as.matrix(wine_data_subset[, -ncol(wine_data_subset)])
+y <- as.matrix(wine_data_subset$quality)
+
+# Normalize the input features
+x <- scale(x)
+
+# Split the data into training and testing sets
+set.seed(123)
+train_indices <- createDataPartition(y, p = 0.8, list = FALSE)
+x_train <- x[train_indices, ]
+y_train <- y[train_indices, ]
+x_test <- x[-train_indices, ]
+y_test <- y[-train_indices, ]
+
+# Create a sequential model
+model <- keras_model_sequential()
+
+# Add hidden layers to the model
+model %>%
+  layer_dense(units = 256, activation = "relu", input_shape = ncol(x)) %>%
+  layer_dropout(rate = 0.3) %>%
+  layer_dense(units = 128, activation = "relu") %>%
+  layer_dropout(rate = 0.3) %>%
+  layer_dense(units = 64, activation = "relu") %>%
+  layer_dropout(rate = 0.3) %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dropout(rate = 0.3) %>%
+  layer_dense(units = 16, activation = "relu") %>%
+  layer_dropout(rate = 0.3) %>%
+  layer_dense(units = 1, activation = "linear")
+
+# Compile the model
+model %>% compile(
+  loss = "mean_squared_error",
+  optimizer = optimizer_adam(lr = 0.0005)  # Adjust the learning rate and use Adam optimizer
+)
+
+# Train the model
+history <- model %>% fit(
+  x_train, y_train,
+  epochs = 400,  # Increase the number of epochs
+  batch_size = 32,
+  validation_split = 0.2
+)
+
+# Evaluate the model on test data
+test_evaluation <- model %>% evaluate(x_test, y_test)
+test_accuracy <- 1 - test_evaluation[[1]]
+
+# Print the test accuracy
+cat("Test accuracy:", test_accuracy, "\n")
+
+```
+
+
+
